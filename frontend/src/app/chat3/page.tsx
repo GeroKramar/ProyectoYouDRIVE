@@ -4,6 +4,7 @@ import React, { useEffect, useState, ChangeEvent, FormEvent } from "react";
 import Swal from "sweetalert2";
 import { io, Socket } from "socket.io-client";
 import { IRentalChat, IUserChat, TMessageChat } from "@/interfaces/Ichat";
+import { IUser, IUserData } from "@/interfaces/IUser";
 
 const ChatWeb: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -19,14 +20,12 @@ const ChatWeb: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [sender, setSender] = useState<IUserChat | null>(null);
   const [receiver, setReceiver] = useState<IUserChat | null>(null);
-
-  const router = useRouter();
+  const [user, setUser] = useState<IUserChat | null>(null);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
-  const userApiUrl = process.env.NEXT_PUBLIC_API_GET_USERS_TOKEN;
-
-  if (!apiUrl || !userApiUrl) {
-    throw new Error('Environment variables NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_GET_USERS_TOKEN are not set');
+  const apiToken = process.env.NEXT_PUBLIC_API_GET_USERS_TOKEN;
+  if (!apiUrl) {
+    throw new Error('Environment variable NEXT_PUBLIC_API_GET_USERS_TOKEN is not set');
   }
 
   const fetchUserDetails = async (token: string) => {
@@ -156,9 +155,107 @@ const ChatWeb: React.FC = () => {
     }
   }, [userToken, room_id]);
 
+  useEffect(() => {
+    const fetchMessages = async () => {
+      if (room_id) {
+        try {
+          const response = await fetch(`${apiUrl}/chat/${room_id}/messages`);
+          const response2 = await fetch(`${apiToken}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${userToken}`,
+              "Content-Type": "application/json",
+            },
+          });
+          if (!response.ok) {
+            throw new Error("Error fetching messages");
+          }
+          const data: TMessageChat[] = await response.json();
+          if (data.length > 0) {
+            setSender(data[0].sender as IUserChat);  
+            setReceiver(data[0].receiver as IUserChat);  
+          }
+          // Ordenar mensajes por fecha de creación
+          const sortedMessages = data.sort((a, b) => new Date(a.date_created || "").getTime() - new Date(b.date_created || "").getTime());
+          setMessages(sortedMessages);
+          console.log(sortedMessages);
+          if (response2.ok) { 
+            const data2 = await response2.json();
+            setUser(data2);
+          }
+        } catch (error) {
+          console.error("Error al obtener los mensajes:", error);
+          setError("Error al obtener los mensajes.");
+        }
+      }
+    };
+
+    if (room_id) {
+      fetchMessages();
+    }
+  }, [room_id, apiUrl]);
+
   const toggleMenu = () => {
     setMenuOpen(!menuOpen);
   };
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.localStorage) {
+      const userSession = localStorage.getItem("userSession");
+      if (userSession) {
+        const parsedSession = JSON.parse(userSession);
+        setUserToken(parsedSession.token);
+        // Aquí puedes realizar una llamada a la API para obtener los detalles del usuario actual
+        // y establecer el estado `currentUser`
+        // Ejemplo:
+        
+      } else {
+        setLoading(true);
+        Swal.fire({
+          title: "Error de acceso",
+          text: "Necesitas estar logueado para ingresar",
+          icon: "error",
+        });
+        redirect("/login");
+      }
+    }
+  }, [router]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`${apiUrl}/rentals/token`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${userToken}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error("Error fetching user data");
+        }
+
+        const data: IRentalChat[] = await response.json();
+        setRentalsChat(data);
+        if (data.length > 0) {
+          console.log(data);
+          
+          setRoom_id(data[0].room_id);
+        }
+      } catch (error: any) {
+        console.error(error);
+        setError("Error al obtener los datos de alquileres.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (userToken) {
+      fetchData();
+    }
+  }, [userToken, apiUrl]);
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     setMessage(e.target.value);
@@ -170,10 +267,14 @@ const ChatWeb: React.FC = () => {
       console.error("No se han establecido todos los datos necesarios.");
       return;
     }
-
-    const newMessage: TMessageChat = {
-      sender: currentUser,
-      receiver: receiver,
+    if(!user) {console.error("No se han establecido el remitente o el receptor.");
+      return;
+    }
+    console.log(user);
+    
+    const meMessage: TMessageChat = {
+      sender: sender.id === user.id ? sender : user,  
+      receiver: receiver.id === user.id ? user : receiver,
       message,
       room_id: room_id,
       date_created: new Date(),
@@ -206,7 +307,7 @@ const ChatWeb: React.FC = () => {
 
     setMessage("");
   };
-
+  
   return (
     <div className="bg-gray-400">
       <button onClick={toggleMenu}>
@@ -223,7 +324,7 @@ const ChatWeb: React.FC = () => {
           messages.map((msg, index) => (
             <div key={index}>
               <p>
-                {msg.sender?.id !== currentUser?.id ? msg.sender?.name : 'Yo' }: {msg.message ?? 'Mensaje no disponible'}
+                {msg.sender?.id !== user?.id ? msg.sender?.name : 'Me' }: {msg.message ?? 'Mensaje no disponible'}
               </p>
             </div>
           ))
